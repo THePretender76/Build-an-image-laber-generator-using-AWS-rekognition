@@ -4,18 +4,28 @@ Application web de détection d’objets dans des images JPEG ou PNG avec Amazon
 
 ## Architecture
 
-1. Le navigateur charge `index.html` depuis le bucket S3 frontend.
-2. Il demande à la Lambda URL une URL S3 présignée pour envoyer l’image.
-3. L’image est envoyée dans le bucket S3 d’entrée.
-4. L’événement `ObjectCreated` déclenche la Lambda de traitement.
-5. La Lambda utilise Rekognition et Pillow, puis écrit l’image annotée dans le bucket de sortie.
-6. Le navigateur vérifie périodiquement la disponibilité de l’image et obtient une URL présignée GET pour l’afficher.
+1. L’utilisateur sélectionne une image depuis le site web statique.
+2. Le navigateur demande à une Lambda une URL S3 présignée.
+3. L’image est envoyée directement dans le bucket S3 d’entrée.
+4. Un événement S3 déclenche la Lambda `process-image-add-label`.
+5. La Lambda appelle Amazon Rekognition, dessine les cadres et libellés avec Pillow, puis enregistre l’image finale dans le bucket de sortie.
+6. Le site interroge la Lambda d’URL présignée jusqu’à ce que l’image traitée soit disponible, puis l’affiche et permet son téléchargement.
 
-Le diagramme importable est disponible dans `visioncraft-architecture.drawio`.
+<img width="1170" height="1260" alt="visioncraft-architecture drawio (1)" src="https://github.com/user-attachments/assets/5f197bc5-4a5e-4df5-8761-8bcf6b91e791" />
 
-## Fichiers utiles
 
-| Fichier | Rôle |
+## Technologies
+
+- Amazon S3 : hébergement statique, stockage des images source et traitées
+- AWS Lambda (Python / boto3) : génération d’URL présignées et traitement des images
+- Amazon Rekognition : détection des labels et des instances
+- Pillow : dessin des cadres et des textes sur l’image
+- HTML, CSS et JavaScript : interface web
+- AWS CloudFormation : modèle d’infrastructure de départ
+
+## Contenu du dépôt
+
+| Élément | Rôle |
 | --- | --- |
 | `index.html` | Interface web. |
 | `fichier projet/process_image_add_label.py` | Source de la Lambda de traitement. |
