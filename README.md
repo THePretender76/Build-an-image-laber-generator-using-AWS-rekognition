@@ -11,18 +11,8 @@ VisionCraft AI est une application web qui permet d’envoyer une image JPEG, de
 5. La Lambda appelle Amazon Rekognition, dessine les cadres et libellés avec Pillow, puis enregistre l’image finale dans le bucket de sortie.
 6. Le site interroge la Lambda d’URL présignée jusqu’à ce que l’image traitée soit disponible, puis l’affiche et permet son téléchargement.
 
-```text
-Navigateur → Lambda URL présignée → Bucket S3 d’entrée
-                                      │
-                                      ▼
-                          Événement S3 / Lambda de traitement
-                                      │
-                                      ▼
-                            Amazon Rekognition + Pillow
-                                      │
-                                      ▼
-                              Bucket S3 de sortie → Navigateur
-```
+<img width="1170" height="1260" alt="visioncraft-architecture drawio (1)" src="https://github.com/user-attachments/assets/5f197bc5-4a5e-4df5-8761-8bcf6b91e791" />
+
 
 ## Technologies
 
