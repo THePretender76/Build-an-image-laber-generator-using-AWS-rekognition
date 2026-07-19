@@ -1,0 +1,212 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: VisionCraft AI - static website, S3 image processing and Amazon Rekognition
+
+Parameters:
+  ProjectPrefix:
+    Type: String
+    Default: visioncraft
+    AllowedPattern: '^[a-z0-9-]+$'
+  PillowLayerArn:
+    Type: String
+    Description: ARN of a Python 3.11 Lambda layer containing Pillow.
+  ProcessorCodeBucket:
+    Type: String
+    Description: S3 bucket containing the packaged processor Lambda source.
+  ProcessorCodeKey:
+    Type: String
+    Description: S3 key of the packaged processor Lambda source.
+  PresignedCodeBucket:
+    Type: String
+    Description: S3 bucket containing the packaged presigned URL Lambda source.
+  PresignedCodeKey:
+    Type: String
+    Description: S3 key of the packaged presigned URL Lambda source.
+  AllowedOrigin:
+    Type: String
+    Default: '*'
+    Description: Use the static website URL instead of * in production.
+
+Resources:
+  ProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+      Policies:
+        - PolicyName: ProcessImages
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                # Use generated bucket ARNs here to avoid a CloudFormation dependency
+                # cycle: UploadBucket -> permission -> function -> role -> UploadBucket.
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${ProjectPrefix}-upload-${AWS::AccountId}-${AWS::Region}/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${ProjectPrefix}-processed-${AWS::AccountId}-${AWS::Region}/*'
+              - Effect: Allow
+                Action: rekognition:DetectLabels
+                Resource: '*'
+
+  ProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectPrefix}-process-image'
+      Runtime: python3.11
+      Handler: process_image_add_label.lambda_handler
+      Timeout: 60
+      MemorySize: 512
+      Role: !GetAtt ProcessorRole.Arn
+      Layers: [!Ref PillowLayerArn]
+      Environment:
+        Variables: {PROCESSED_BUCKET: !Ref ProcessedBucket}
+      Code:
+        S3Bucket: !Ref ProcessorCodeBucket
+        S3Key: !Ref ProcessorCodeKey
+
+  ProcessorInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ProcessorFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: ProcessorInvokePermission
+    Properties:
+      BucketName: !Sub '${ProjectPrefix}-upload-${AWS::AccountId}-${AWS::Region}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: [Content-Type]
+            AllowedMethods: [PUT]
+            AllowedOrigins: [!Ref AllowedOrigin]
+            MaxAge: 300
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt ProcessorFunction.Arn
+
+  ProcessedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectPrefix}-processed-${AWS::AccountId}-${AWS::Region}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET]
+            AllowedOrigins: [!Ref AllowedOrigin]
+
+  PresignedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+      Policies:
+        - PolicyName: GeneratePresignedUrls
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub '${UploadBucket.Arn}/*'
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${ProcessedBucket.Arn}/*'
+
+  PresignedFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectPrefix}-get-presigned-url'
+      Runtime: python3.11
+      Handler: get_presigned_url.lambda_handler
+      Timeout: 30
+      Role: !GetAtt PresignedRole.Arn
+      Environment:
+        Variables:
+          INPUT_BUCKET: !Ref UploadBucket
+          PROCESSED_BUCKET: !Ref ProcessedBucket
+          ALLOWED_ORIGIN: !Ref AllowedOrigin
+      Code:
+        S3Bucket: !Ref PresignedCodeBucket
+        S3Key: !Ref PresignedCodeKey
+
+  PresignedFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !Ref PresignedFunction
+      AuthType: NONE
+      Cors:
+        AllowOrigins: [!Ref AllowedOrigin]
+        AllowMethods: [GET]
+        AllowHeaders: [Content-Type]
+
+  PresignedFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PresignedFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  PresignedFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PresignedFunction
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectPrefix}-frontend-${AWS::AccountId}-${AWS::Region}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration: {IndexDocument: index.html}
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+
+Outputs:
+  WebsiteURL:
+    Description: Upload index.html to the frontend bucket, then open this URL.
+    Value: !GetAtt FrontendBucket.WebsiteURL
+  FrontendBucketName:
+    Value: !Ref FrontendBucket
+  PresignedFunctionUrl:
+    Description: The deployment script inserts this URL into index.html.
+    Value: !GetAtt PresignedFunctionUrl.FunctionUrl

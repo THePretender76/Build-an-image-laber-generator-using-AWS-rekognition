@@ -196,8 +196,8 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
                     </svg>
                     <p style="color: var(--text-muted); font-weight: 600;">Drop Image Here</p>
-                    <p style="font-size: 12px; color: #52525b; margin-top: 5px;">Supports JPEG files</p>
-                    <input type="file" id="imageInput" accept="image/jpeg" style="display:none">
+                    <p style="font-size: 12px; color: #52525b; margin-top: 5px;">Supports JPEG and PNG files</p>
+                    <input type="file" id="imageInput" accept="image/jpeg,image/png" style="display:none">
                 </div>
 
                 <div class="status-box">
@@ -228,7 +228,8 @@
     </div>
 
     <script>
-        const LAMBDA_URL = 'https://sfz2axozliafccsk7jkbtgvbhu0lgsdq.lambda-url.us-east-1.on.aws/';
+        // The deployment script replaces only this marker with the Function URL.
+        const LAMBDA_URL = '__LAMBDA_FUNCTION_URL__';
 
         function resetUI() {
             document.getElementById('resultImage').style.display = 'none';
@@ -249,29 +250,57 @@
             const txt = document.getElementById('statusText');
             
             try {
+                if (LAMBDA_URL === '__LAMBDA_FUNCTION_URL__') {
+                    throw new Error('The Lambda URL has not been configured.');
+                }
                 txt.innerText = "Uploading...";
                 const res = await fetch(`${LAMBDA_URL}?action=upload&file=${encodeURIComponent(file.name)}`);
                 const data = await res.json();
+                if (!res.ok || data.status !== 'upload_ready') {
+                    throw new Error(data.error || 'Unable to create an upload URL.');
+                }
                 
                 bar.style.width = "30%"; pct.innerText = "30%";
-                await fetch(data.url, { method: 'PUT', body: file });
+                const upload = await fetch(data.url, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'image/jpeg' },
+                    body: file
+                });
+                if (!upload.ok) {
+                    throw new Error('Image upload failed.');
+                }
 
                 txt.innerText = "AI Analyzing...";
                 bar.style.width = "60%"; pct.innerText = "60%";
-                
+
                 let attempts = 0;
+                const maxAttempts = 30;
                 const interval = setInterval(async () => {
                     attempts++;
-                    const vRes = await fetch(`${LAMBDA_URL}?action=view&file=${encodeURIComponent(file.name)}`);
-                    const vData = await vRes.json();
-                    
-                    if (vData.status === "ready") {
-                        clearInterval(interval);
-                        txt.innerText = "Completed";
-                        bar.style.width = "100%"; pct.innerText = "100%";
-                        document.getElementById('resultImage').src = vData.url + "&t=" + Date.now();
-                        document.getElementById('resultImage').style.display = 'block';
-                        document.getElementById('placeholder').style.display = 'none';
+                    try {
+                        const vRes = await fetch(`${LAMBDA_URL}?action=view&file=${encodeURIComponent(file.name)}`);
+                        const vData = await vRes.json();
+
+                        if (vData.status === "ready") {
+                            clearInterval(interval);
+                            txt.innerText = "Completed";
+                            bar.style.width = "100%"; pct.innerText = "100%";
+                            document.getElementById('resultImage').src = vData.url + "&t=" + Date.now();
+                            document.getElementById('resultImage').style.display = 'block';
+                            document.getElementById('placeholder').style.display = 'none';
+                        } else if (attempts >= maxAttempts) {
+                            clearInterval(interval);
+                            txt.innerText = "Processing timed out";
+                            bar.style.width = "100%"; pct.innerText = "100%";
+                            alert("The image processing did not complete in time. Check the AWS Lambda logs.");
+                        }
+                    } catch (e) {
+                        if (attempts >= maxAttempts) {
+                            clearInterval(interval);
+                            txt.innerText = "Processing error";
+                            bar.style.width = "100%"; pct.innerText = "100%";
+                            alert("Unable to check processing status. Please verify the Lambda and S3 configuration.");
+                        }
                     }
                 }, 2000);
             } catch (e) { alert("Error connecting to AI"); resetUI(); }

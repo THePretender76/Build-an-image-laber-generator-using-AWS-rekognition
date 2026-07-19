@@ -1,108 +1,51 @@
-# VisionCraft AI — Générateur de labels d’images avec AWS Rekognition
+# VisionCraft AI
 
-VisionCraft AI est une application web qui permet d’envoyer une image JPEG, de la faire analyser par **Amazon Rekognition**, puis d’afficher une copie annotée avec les objets détectés, leurs scores de confiance et leurs cadres de délimitation rouges.
+Application web de détection d’objets dans des images JPEG ou PNG avec Amazon Rekognition. Le résultat est une copie annotée avec les labels et cadres de délimitation détectés.
 
-## Fonctionnement
+## Architecture
 
-1. L’utilisateur sélectionne une image depuis le site web statique.
-2. Le navigateur demande à une Lambda une URL S3 présignée.
-3. L’image est envoyée directement dans le bucket S3 d’entrée.
-4. Un événement S3 déclenche la Lambda `process-image-add-label`.
-5. La Lambda appelle Amazon Rekognition, dessine les cadres et libellés avec Pillow, puis enregistre l’image finale dans le bucket de sortie.
-6. Le site interroge la Lambda d’URL présignée jusqu’à ce que l’image traitée soit disponible, puis l’affiche et permet son téléchargement.
+1. Le navigateur charge `index.html` depuis le bucket S3 frontend.
+2. Il demande à la Lambda URL une URL S3 présignée pour envoyer l’image.
+3. L’image est envoyée dans le bucket S3 d’entrée.
+4. L’événement `ObjectCreated` déclenche la Lambda de traitement.
+5. La Lambda utilise Rekognition et Pillow, puis écrit l’image annotée dans le bucket de sortie.
+6. Le navigateur vérifie périodiquement la disponibilité de l’image et obtient une URL présignée GET pour l’afficher.
 
-```text
-Navigateur → Lambda URL présignée → Bucket S3 d’entrée
-                                      │
-                                      ▼
-                          Événement S3 / Lambda de traitement
-                                      │
-                                      ▼
-                            Amazon Rekognition + Pillow
-                                      │
-                                      ▼
-                              Bucket S3 de sortie → Navigateur
-```
+Le diagramme importable est disponible dans `visioncraft-architecture.drawio`.
 
-## Technologies
+## Fichiers utiles
 
-- Amazon S3 : hébergement statique, stockage des images source et traitées
-- AWS Lambda (Python / boto3) : génération d’URL présignées et traitement des images
-- Amazon Rekognition : détection des labels et des instances
-- Pillow : dessin des cadres et des textes sur l’image
-- HTML, CSS et JavaScript : interface web
-- AWS CloudFormation : modèle d’infrastructure de départ
-
-## Contenu du dépôt
-
-| Élément | Rôle |
+| Fichier | Rôle |
 | --- | --- |
-| `index.html` | Interface VisionCraft AI à héberger dans le bucket web. |
-| `fichier projet/process-image-add-label.txt` | Code de la Lambda appelée lors d’un dépôt dans S3. |
-| `fichier projet/GetPresignedURL.txt` | Code de la Lambda qui génère les URL d’envoi et de consultation. |
-| `Cloudformation file/infrastructure vision craft.txt` | Modèle CloudFormation de l’infrastructure. |
-| `description of the action.txt` | Notes de conception et ressources AWS utilisées. |
-
-## Ressources AWS attendues
-
-Le projet utilise trois buckets S3 :
-
-- `front-end-website-label-image` : site web statique.
-- `project-label-image-receiver` : images envoyées par les utilisateurs.
-- `project-label-image-output` : images annotées générées par la Lambda.
-
-Les noms figurant dans les scripts sont des exemples de déploiement. Adaptez-les à votre compte AWS et à votre région avant de déployer.
-
-## Déploiement
-
-### 1. Préparer la Lambda de traitement
-
-Créez une fonction Lambda Python nommée `process-image-add-label` et copiez le code de `fichier projet/process-image-add-label.txt`.
-
-Cette fonction doit :
-
-- être déclenchée par les événements `ObjectCreated` du bucket d’entrée ;
-- disposer d’une couche Lambda contenant Pillow ;
-- avoir le droit de lire le bucket d’entrée, d’écrire dans le bucket de sortie et d’appeler `rekognition:DetectLabels`.
-
-### 2. Préparer la Lambda d’URL présignée
-
-Créez une seconde Lambda à partir de `fichier projet/GetPresignedURL.txt`, puis exposez-la avec une Lambda Function URL ou Amazon API Gateway. Renseignez son URL dans `index.html` :
-
-```js
-const LAMBDA_URL = 'https://…lambda-url.<region>.on.aws/';
-```
-
-### 3. Configurer les buckets et CORS
-
-- Activez l’hébergement de site statique sur le bucket frontend et envoyez-y `index.html`.
-- Ajoutez CORS sur le bucket d’entrée pour autoriser `PUT` depuis l’origine du site.
-- Ajoutez CORS sur le bucket de sortie pour autoriser `GET` depuis l’origine du site.
-- Configurez la notification S3 du bucket d’entrée vers la Lambda de traitement.
-
-Un modèle de base se trouve dans `Cloudformation file/infrastructure vision craft.txt` ; complétez-le avec le code de production, la couche Pillow, les notifications S3 et les autorisations Rekognition.
-
-## Utilisation
-
-1. Ouvrez l’URL du site S3.
-2. Cliquez dans la zone d’envoi et sélectionnez une image JPEG.
-3. Attendez la progression : envoi, analyse IA, puis résultat.
-4. Téléchargez l’image annotée avec le bouton **Download**.
-
-## Points d’attention
-
-- Les URL présignées expirent : 5 minutes pour l’envoi et 60 secondes pour la consultation dans la configuration actuelle.
-- Le frontend accepte actuellement les JPEG uniquement ; la Lambda enregistre aussi la sortie au format JPEG.
-- Les politiques CORS avec `*` et l’accès public sont pratiques pour une démo, mais doivent être restreints à votre domaine en production.
-- Évitez de réutiliser directement le nom de fichier fourni par un utilisateur : ajoutez un identifiant unique afin d’éviter les collisions et les écrasements.
-- Ajoutez une durée maximale de polling et un affichage d’erreur dans l’interface pour les échecs de traitement.
+| `index.html` | Interface web. |
+| `fichier projet/process_image_add_label.py` | Source de la Lambda de traitement. |
+| `fichier projet/get_presigned_url.py` | Source de la Lambda qui génère les URLs présignées. |
+| `Cloudformation file/infrastructure-vision-craft.yml` | Infrastructure AWS complète. |
+| `deploy.ps1` | Déploiement sous PowerShell. |
+| `deploy.sh` | Déploiement sous Bash. |
+| `DEPLOYMENT.md` | Instructions de déploiement détaillées. |
 
 ## Prérequis
 
-- Un compte AWS avec accès à S3, Lambda, IAM et Amazon Rekognition.
-- Une région AWS prise en charge par Rekognition (les scripts utilisent `us-east-1`).
-- Python 3.x et une couche Lambda contenant Pillow pour la fonction de traitement.
+- AWS CLI connecté à un compte AWS (`aws login` ou `aws configure`).
+- Droits IAM pour CloudFormation, Lambda, IAM, S3 et Rekognition.
+- Une couche Lambda compatible **Python 3.11** qui contient Pillow. Son ARN est obligatoire.
 
-## Licence
+## Déploiement
 
-Projet pédagogique. Ajoutez une licence explicite avant toute distribution ou réutilisation publique.
+Sous PowerShell :
+
+```powershell
+.\deploy.ps1 -PillowLayerArn "arn:aws:lambda:us-east-1:123456789012:layer:my-pillow-layer:1"
+```
+
+Sous Bash :
+
+```bash
+export PILLOW_LAYER_ARN='arn:aws:lambda:us-east-1:123456789012:layer:my-pillow-layer:1'
+bash ./deploy.sh
+```
+
+Les scripts empaquettent les deux fichiers Python, les publient dans un bucket d’artefacts privé, déploient la stack, remplacent temporairement le marqueur d’URL par l’URL générée de la Lambda et publient le frontend dans S3. Les fichiers source restent conservés dans le projet.
+
+Pour restreindre CORS après la démo, passez l’URL du site S3 comme `AllowedOrigin` au lieu de `*`.
